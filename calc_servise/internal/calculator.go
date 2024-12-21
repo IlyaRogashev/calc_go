@@ -1,7 +1,6 @@
 package calculate
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"unicode"
@@ -23,10 +22,10 @@ func Calc(expression string) (float64, error) {
 		} else if ch == ')' {
 			for operators[len(operators)-1] != '(' {
 				if len(cifers) < 2 || len(operators) == 0 {
-					return 0, fmt.Errorf("mismatch parentheses")
+					return 0, ErrInvalidExpression
 				}
 				if err := applyOperator(&cifers, &operators); err != nil {
-					return 0, err
+					return 0, ErrInvalidExpression
 				}
 			}
 			operators = operators[:len(operators)-1]
@@ -41,29 +40,29 @@ func Calc(expression string) (float64, error) {
 		} else if ch == '+' || ch == '-' || ch == '*' || ch == '/' {
 			for len(operators) > 0 && hasPrecedence(ch, operators[len(operators)-1]) {
 				if len(cifers) < 2 || len(operators) == 0 {
-					return 0, fmt.Errorf("insufficient operands")
+					return 0, ErrInvalidExpression
 				}
 				if err := applyOperator(&cifers, &operators); err != nil {
-					return 0, err
+					return 0, ErrInvalidExpression
 				}
 			}
 			operators = append(operators, ch)
 		} else {
-			return 0, fmt.Errorf("unknown character: %c", ch)
+			return 0, ErrInvalidExpression
 		}
 	}
 
 	for len(operators) > 0 {
 		if len(cifers) < 2 || len(operators) == 0 {
-			return 0, fmt.Errorf("insufficient numbers")
+			return 0, ErrInvalidExpression
 		}
 		if err := applyOperator(&cifers, &operators); err != nil {
-			return 0, err
+			return 0, ErrInvalidExpression
 		}
 	}
 
 	if len(cifers) != 1 {
-		return 0, fmt.Errorf("insufficient numbers")
+		return 0, ErrInvalidExpression
 	}
 	return cifers[0], nil
 }
@@ -91,7 +90,7 @@ func applyOperator(values *[]float64, operators *[]rune) error {
 		}
 		result = left / right
 	default:
-		return fmt.Errorf("unknown operation: %c", op)
+		return ErrInvalidExpression
 	}
 
 	*values = append(*values, result)
