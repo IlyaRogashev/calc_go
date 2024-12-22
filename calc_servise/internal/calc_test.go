@@ -1,7 +1,9 @@
-package calculate
+package calc_test
 
 import (
 	"testing"
+
+	"https://github.com/IlyaRogashev/calc_go/blob/main/calc_servise/internal/calculator.go"
 )
 
 func TestCalc(t *testing.T) {
@@ -34,7 +36,7 @@ func TestCalc(t *testing.T) {
 
 	for _, testCase := range testCasesSuccess {
 		t.Run(testCase.name, func(t *testing.T) {
-			val, err := Calc(testCase.expression)
+			val, err := calc.Calc(testCase.expression)
 			if err != nil {
 				t.Fatalf("successful case %s returns error", testCase.expression) // ошибок не должно быть
 			}
@@ -52,33 +54,33 @@ func TestCalc(t *testing.T) {
 		{
 			name:        "invalid_operator",
 			expression:  "1+1*",
-			expectedErr: ErrInvalidExpression,
+			expectedErr: calc.ErrInvalidExpression,
 		},
 		{
 			name:        "invalid_operator",
 			expression:  "2+2**2",
-			expectedErr: ErrInvalidExpression,
+			expectedErr: calc.ErrInvalidExpression,
 		},
 		{
 			name:        "invalid_parentheses",
 			expression:  "((2+2-*(2",
-			expectedErr: ErrInvalidExpression,
+			expectedErr: calc.ErrInvalidExpression,
 		},
 		{
 			name:        "empty_expression",
 			expression:  "",
-			expectedErr: ErrEmptyExpression,
+			expectedErr: calc.ErrEmptyExpression,
 		},
 		{
 			name:        "division_by_zero",
 			expression:  "1/0",
-			expectedErr: ErrDivisionByZero,
+			expectedErr: calc.ErrDivisionByZero,
 		},
 	}
 
 	for _, testCase := range testCasesFail {
 		t.Run(testCase.name, func(t *testing.T) {
-			val, err := Calc(testCase.expression)
+			val, err := calc.Calc(testCase.expression)
 			if err == nil {
 				t.Fatalf("expression %s is invalid but result %f was obtained", testCase.expression, val) // ошибка отсутствует
 			}
