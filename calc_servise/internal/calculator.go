@@ -1,113 +1,122 @@
-package calculate
+package calc
 
 import (
+	"container/list"
+	"reflect"
 	"strconv"
-	"strings"
-	"unicode"
 )
 
-// Дорогой/ая проверяющий/ая, я специально для тебя поставил тут коменты, так что не подумай что я чатгптист какой нибудь,
-//и я был бы рад если ты докинешь за коменты балл к оформлению)
 
-// Calc функция для вычислений выражений
+
 func Calc(expression string) (float64, error) {
-	expression = strings.ReplaceAll(expression, " ", "")
-	cifers := make([]float64, 0)
-	operators := make([]rune, 0)
-
-	for i := 0; i < len(expression); i++ {
-		ch := rune(expression[i])
-		if ch == '(' {
-			operators = append(operators, ch)
-		} else if ch == ')' {
-			for operators[len(operators)-1] != '(' {
-				if len(cifers) < 2 || len(operators) == 0 {
-					return 0, ErrInvalidExpression
-				}
-				if err := applyOperator(&cifers, &operators); err != nil {
-					return 0, ErrInvalidExpression
-				}
-			}
-			operators = operators[:len(operators)-1]
-		} else if unicode.IsDigit(ch) {
-			start := i
-			for i < len(expression) && unicode.IsDigit(rune(expression[i])) {
-				i++
-			}
-			number, _ := strconv.ParseFloat(expression[start:i], 64)
-			cifers = append(cifers, number)
-			i--
-		} else if ch == '+' || ch == '-' || ch == '*' || ch == '/' {
-			for len(operators) > 0 && hasPrecedence(ch, operators[len(operators)-1]) {
-				if len(cifers) < 2 || len(operators) == 0 {
-					return 0, ErrInvalidExpression
-				}
-				if err := applyOperator(&cifers, &operators); err != nil {
-					return 0, ErrInvalidExpression
-				}
-			}
-			operators = append(operators, ch)
-		} else {
-			return 0, ErrInvalidExpression
-		}
+	if len(expression) == 0 {
+		return 0, ErrEmptyExpression
 	}
 
-	for len(operators) > 0 {
-		if len(cifers) < 2 || len(operators) == 0 {
-			return 0, ErrInvalidExpression
-		}
-		if err := applyOperator(&cifers, &operators); err != nil {
-			return 0, ErrInvalidExpression
+	var containsValidChars bool
+	for _, char := range expression {
+		if (char >= '0' && char <= '9') || char == '+' || char == '-' || char == '*' || char == '/' {
+			containsValidChars = true
+			break
 		}
 	}
-
-	if len(cifers) != 1 {
+	if !containsValidChars {
 		return 0, ErrInvalidExpression
 	}
-	return cifers[0], nil
-}
 
-// applyOperator выполняет операцию над двумя числами
-func applyOperator(values *[]float64, operators *[]rune) error {
-	right := (*values)[len(*values)-1]
-	left := (*values)[len(*values)-2]
-	op := (*operators)[len(*operators)-1]
-
-	*values = (*values)[:len(*values)-2]
-	*operators = (*operators)[:len(*operators)-1]
-
-	var result float64
-	switch op {
-	case '+':
-		result = left + right
-	case '-':
-		result = left - right
-	case '*':
-		result = left * right
-	case '/':
-		if right == 0 {
-			return ErrDivisionByZero
+	var err error
+	var res float64
+	var buf string
+	l := list.New()
+	var i string
+	for _, x := range expression {
+		i = string(x)
+		if i == "(" || i == ")" || i == "-" || i == "+" || i == "*" || i == "/" {
+			res, err = strconv.ParseFloat(buf, 64)
+			if err == nil {
+				l.PushBack(res)
+			}
+			l.PushBack(i)
+			buf = ""
+		} else {
+			buf += i
 		}
-		result = left / right
-	default:
-		return ErrInvalidExpression
+	}
+	if buf != "" {
+		res, err = strconv.ParseFloat(buf, 64)
+		if err == nil {
+			l.PushBack(res)
+		}
 	}
 
-	*values = append(*values, result)
-	return nil
-}
-
-// hasPrecedence проверяет приоритет операторов, типа токенизации, но я её вообще не понял и налепил что то своё
-func hasPrecedence(current, top rune) bool {
-	precedences := map[rune]int{
-		'(': 1,
-		')': 1,
-		'+': 2,
-		'-': 2,
-		'*': 3,
-		'/': 3,
+	ans := list.New()
+	stack := list.New()
+	for e := l.Front(); e != nil; e = e.Next() {
+		xt := reflect.TypeOf(e.Value).Kind()
+		if xt == reflect.Float64 {
+			ans.PushBack(e.Value)
+		} else if e.Value == "(" {
+			stack.PushBack(e.Value)
+		} else if e.Value == ")" {
+			for stack.Back() != nil && stack.Back().Value != "(" {
+				ans.PushBack(stack.Back().Value)
+				stack.Remove(stack.Back())
+			}
+			if stack.Back() == nil {
+				return 0, ErrInvalidExpression
+			}
+			stack.Remove(stack.Back())
+		} else if e.Value == "*" || e.Value == "/" {
+			for stack.Back() != nil && (stack.Back().Value == "*" || stack.Back().Value == "/") {
+				ans.PushBack(stack.Back().Value)
+				stack.Remove(stack.Back())
+			}
+			stack.PushBack(e.Value)
+		} else if e.Value == "-" || e.Value == "+" {
+			for stack.Back() != nil && (stack.Back().Value == "*" || stack.Back().Value == "/" || stack.Back().Value == "+" || stack.Back().Value == "-") {
+				ans.PushBack(stack.Back().Value)
+				stack.Remove(stack.Back())
+			}
+			stack.PushBack(e.Value)
+		}
 	}
-	currentPrec := precedences[current]
-	topPrec := precedences[top]
-	return currentPrec <= topPrec
-}
+	for stack.Back() != nil {
+		ans.PushBack(stack.Back().Value)
+		stack.Remove(stack.Back())
+	}
+
+	result := list.New()
+
+	for e := ans.Front(); e != nil; e = e.Next() {
+		xt := reflect.TypeOf(e.Value).Kind()
+		if xt == reflect.Float64 {
+			result.PushBack(e.Value)
+		} else {
+			if result.Len() < 2 {
+				return 0, ErrInvalidExpression
+			}
+			x2 := result.Back().Value.(float64)
+			result.Remove(result.Back())
+			x1 := result.Back().Value.(float64)
+			result.Remove(result.Back())
+			var x float64
+
+			switch e.Value {
+			case "*":
+				x = x1 * x2
+			case "/":
+				if x2 == 0 {
+					return 0, ErrDivisionByZero
+				}
+				x = x1 / x2
+			case "+":
+				x = x1 + x2
+			case "-":
+				x = x1 - x2
+			}
+			result.PushBack(x)
+		}
+	}
+
+	return result.Back().Value.(float64), nil
+}///Наконец этот ужас работает корректно 
