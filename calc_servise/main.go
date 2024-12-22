@@ -1,102 +1,120 @@
 package main
 
 import (
-	calculate "calc_servise/internal"
-	"calc_servise/pkg/mathutils"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"os"
-	"strings"
+    "bufio"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "strings"
 )
 
+type Config struct {
+    Addr string
+}
+
+func ConfigFromEnv() *Config {
+    config := new(Config)
+    config.Addr = os.Getenv("PORT")
+    if config.Addr == "" {
+        config.Addr = "8080"
+    }
+    return config
+}
+
+type Application struct {
+    config *Config
+    logger *log.Logger
+}
+
+func New() *Application {
+    return &Application{
+        config: ConfigFromEnv(),
+        logger: log.New(os.Stdout, "[APP] ", log.Ldate|log.Ltime|log.Lshortfile),
+    }
+}
+
+func (a *Application) Run() error {
+    for {
+        a.logger.Println("Input expression:")
+        reader := bufio.NewReader(os.Stdin)
+        text, err := reader.ReadString('\n')
+        if err != nil {
+            a.logger.Println("Failed to read expression from console")
+            continue
+        }
+        text = strings.TrimSpace(text)
+        if text == "exit" {
+            a.logger.Println("Application was successfully closed")
+            return nil
+        }
+        result, err := calc.Calc(text)
+        if err != nil {
+            a.logger.Printf("%s calculation failed with error: %v", text, err)
+        } else {
+            a.logger.Printf("%s = %f", text, result)
+        }
+    }
+}
+
 type Request struct {
-	Expression string `json:"expression"`
+    Expression string `json:"expression"`
 }
 
 type Response struct {
-	Result string `json:"result,omitempty"`
-	Error  string `json:"error,omitempty"`
+    Result string `json:"result,omitempty"`
+    Error  string `json:"error,omitempty"`
 }
 
-// Config Конфигурация сервера
-type Config struct {
-	Server struct {
-		Host string `json:"host"`
-		Port string `json:"port"`
-	} `json:"server"`
+func CalcHandler(w http.ResponseWriter, r *http.Request) {
+    logger := log.New(os.Stdout, "[HTTP] ", log.Ldate|log.Ltime|log.Lshortfile)
+
+    request := new(Request)
+    defer r.Body.Close()
+    err := json.NewDecoder(r.Body).Decode(request)
+    if err != nil {
+        logger.Printf("Bad Request: %v", err)
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    result, err := calc.Calc(request.Expression)
+    // w.Header().Set("Content-Type", "application/json")
+    if err != nil {
+        var status int
+        var errMsg string
+        if errors.Is(err, calc.ErrInvalidExpression) {
+            status = http.StatusUnprocessableEntity
+            errMsg = calc.ErrInvalidExpression.Error()
+        } else if errors.Is(err, calc.ErrDivisionByZero) {
+            status = http.StatusUnprocessableEntity
+            errMsg = calc.ErrDivisionByZero.Error()
+        } else if errors.Is(err, calc.ErrEmptyExpression) {
+            status = http.StatusUnprocessableEntity
+            errMsg = calc.ErrEmptyExpression.Error()
+        } else {
+            status = http.StatusInternalServerError
+            errMsg = "unknown error"
+        }
+        logger.Printf("Error: %s, Status: %d, Message: %s", request.Expression, status, err)
+        w.WriteHeader(status)
+        json.NewEncoder(w).Encode(Response{Error: errMsg})
+    } else {
+        logger.Printf("Successful calculation: %s = %f", request.Expression, result)
+        json.NewEncoder(w).Encode(Response{Result: fmt.Sprintf("%f", result)})
+    }
 }
 
-func loadConfig() (*Config, error) {
-	file, err := os.Open("configs/config.json")
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var config Config
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &config, nil
-}
-
-func calculateHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req Request
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if strings.Contains(req.Expression, "sum") {
-		sum := mathutils.Add(2, 3)
-		resp := Response{
-			Result: fmt.Sprintf("Sum from mathutils: %d", sum),
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	if strings.Contains(req.Expression, "$") {
-		http.Error(w, `{"error":"Internal server error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	result, err := calculate.Calc(req.Expression)
-	var resp Response
-
-	if err != nil {
-		resp.Error = err.Error()
-		w.WriteHeader(http.StatusUnprocessableEntity)
-	} else {
-		resp.Result = fmt.Sprintf("%f", result)
-		w.WriteHeader(http.StatusOK)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+func (a *Application) RunServer() error {
+    a.logger.Println("Starting server on port " + a.config.Addr)
+    http.HandleFunc("/api/v1/calculate", CalcHandler)
+    return http.ListenAndServe(":"+a.config.Addr, nil)
 }
 
 func main() {
-	// Загрузка
-	config, err := loadConfig()
-	if err != nil {
-		log.Fatalf("Error loading config: %v", err)
-	}
-
-	// Запуск сервера
-	http.HandleFunc("/api/v1/calculate", calculateHandler)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf("%s:%s", config.Server.Host, config.Server.Port), nil))
+    app := New()
+    // app.Run()
+    app.RunServer()
 }
