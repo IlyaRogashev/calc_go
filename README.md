@@ -1,70 +1,111 @@
+# Калькулятор с оркестратором и агентами
 
+Этот проект представляет собой распределённую систему калькуляторов, состоящую из оркестратора и агентов. Оркестратор управляет задачами и распределяет их между агентами, которые выполняют вычисления. Проект написан на языке программирования Go и использует стандартные библиотеки для работы с HTTP и JSON.
 
-# Веб-сервис для вычисления арифметических выражений
+## Архитектура
 
-## Описание
-Этот проект реализует веб-сервис, который вычисляет арифметические выражения, переданные пользователем через HTTP-запрос.
+Система состоит из двух основных компонентов:
 
+1. **Оркестратор**: Управляет потоком задач, распределяет их между агентами и отслеживает состояние каждого выражения.
+2. **Агенты**: Получают задания от оркестратора, выполняют вычисления и отправляют результаты обратно.
 
-## Запуск
+## Установка и запуск
 
-1. Установите [Go](https://go.dev/dl/).
-2. Установите [Git](https://git-scm.com/downloads).
-3. Склонируйте проект с GitHub используя командную строку:
-    git clone https://github.com/IlyaRogashev/calc_go.git
-4. Перейдите в папку (calc_servise) проекта, выполните команду:
+### Требования
 
-    go mod tidy
-5. запустите сервер:
+- Go версии 1.16 или новее.
 
-    go run ./cmd/main.go
-    
-6. Сервис будет доступен по адресу: [http://localhost:8080/api/v1/calculate](http://localhost:8080/api/v1/calculate).
+### Инструкции по установке
 
-### Как сменить порт (для Windiws)?
-1. Для этого нужно собрать calc.exe 
-2. Перейдите в папку (calc_go/cmd) проекта
-3. выполните команды
+1. Клонируйте репозиторий:
 
-go build -o calc.exe 
+```bash
+git clone https://github.com/IlyaRogashev/calc_go.git
+```
 
-set "PORT=8087" & "calc.exe" (в примере порт = 8087)
+2. Перейдите в директорию проекта:
 
-## Эндпоинты
-### `POST /api/v1/calculate`
+```bash
+cd calc_go
+```
 
-#### Описание
-Эндпоинт принимает JSON с математическим выражением.
+3. Установите зависимости:
 
-#### Пример запроса с использованием curl
-пример для cmd
+```bash
+go mod tidy
+```
 
-curl -X POST http://localhost:8080/api/v1/calculate -H "Content-Type: application/json" -d "{\\"expression\": \\"1\\"}" 
-(пример корректного запроса, код:200)
+### Запуск оркестратора
 
-git bash
+1. Настройте переменные окружения:
 
-curl --location 'localhost:8080/api/v1/calculate' \
+```bash
+export SERVER_PORT=8000
+```
+
+2. Запустите оркестратора:
+
+```bash
+go run cmd/orchestrator_start/main.go
+```
+
+### Запуск агентов
+
+1. Настройте переменные окружения:
+
+```bash
+export SERVER_URL="http://localhost:8000"
+export COMPUTING_POWER=4
+```
+
+2. Запустите агентов:
+
+```bash
+go run cmd/agent_start/main.go
+```
+
+## Использование
+
+### Эндпоинты оркестратора
+
+Оркестратор предоставляет следующие эндпоинты:
+
+#### Добавление вычисления арифметического выражения
+
+```bash
+curl --location 'localhost:8000/api/v1/calculate' \
 --header 'Content-Type: application/json' \
 --data '{
-  "expression": "2+2*2"
+  "expression": "<строка с выражение>"
 }'
+```
 
-Пример запроса с пустым выражением, код: 422, ошибка:empty expression
+#### Получение списка выражений
 
-curl -X POST http://localhost:8080/api/v1/calculate -H "Content-Type: application/json" -d "{\\"expression\": \\"\\"}" 
+```bash
+curl --location 'localhost:8000/api/v1/expressions'
+```
 
-Пример запроса с делением на 0, код: 422, ошибка:division by zero
+#### Получение выражения по его идентификатору
 
-curl -X POST http://localhost:8080/api/v1/calculate -H "Content-Type: application/json" -d "{\\"expression\": \\"1/0\\"}" 
+```bash
+curl --location 'localhost:8000/api/v1/expressions/<id>'
+```
 
-Пример запроса с неверным выражением, код: 422, ошибка:invalid expression
+#### Получение задачи для выполнения
 
-curl -X POST http://localhost:8080/api/v1/calculate -H "Content-Type: application/json" -d "{\\"expression\\": \\"1++*2\\"}" 
+```bash
+curl --location 'localhost:8000/internal/task'
+```
 
-#### Для запросов можно использовать программу postman
+#### Прием результата обработки данных
 
-## Команды для тестирования
-перейдите в каталог aplication или pkg\calculation и выполните команду 
-
-go test -v
+```bash
+curl --location 'localhost:8000/internal/task' \
+--header 'Content-Type: application/json' \
+--data '{
+  "id": 1,
+  "result": 2.5
+}'
+```
+Как то так)
