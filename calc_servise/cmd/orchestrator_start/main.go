@@ -1,49 +1,28 @@
 package main
 
 import (
-    "context"
+    "flag"
     "log"
     "net/http"
     "os"
-    "os/signal"
-    "syscall"
     "time"
 )
 
 func main() {
-    ctx, cancel := context.WithCancel(context.Background())
-    defer cancel()
+    log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+    flag.Parse()
 
-    orchestrator := orchestrator.NewOrchestrator(ctx)
+    orchestrator := &orchestrator.DefaultOrchestrator{}
+    orchestrator.Start()
 
-    router := mux.NewRouter()
+    simpleAgent := &agent.SimpleAgent{}
+    orchestrator.AddAgent(simpleAgent)
 
-    orchestrator.RegisterHandlers(router, orchestrator)
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        w.Write([]byte("Hello World!"))
+    })
 
-    srv := &http.Server{
-        Addr:    ":8000",
-        Handler: router,
-    }
-
-    go orchestrator.Start()
-
-    go func() {
-        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            log.Fatalf("listen: %s\n", err)
-        }
-    }()
-
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
-    log.Println("Shutting down server...")
+    log.Fatal(http.ListenAndServe(":8080", nil))
 
     orchestrator.Stop()
-
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-    if err := srv.Shutdown(ctx); err != nil {
-        log.Fatalf("server shutdown failed: %v", err)
-    }
-    log.Println("Server exited properly")
 }
