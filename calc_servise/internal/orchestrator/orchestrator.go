@@ -1,211 +1,149 @@
-package orchestrator
+package application
 
 import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "log"
-    "net/http"
-    "sync"
-    "time"
+	"context"
+	"encoding/json"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"sync"
+	"time"
 
+	"github.com/jmoiron/sqlx"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"github.com/IlyaRogashev/calc_go/calc_servise/internal/calc" 
 )
 
+type Config struct {
+	Addr                string
+	TimeAddition        int
+	TimeSubtraction     int
+	TimeMultiplications int
+	TimeDivisions       int
+}
+
+func ConfigFromEnv() *Config {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	ta, _ := strconv.Atoi(os.Getenv("TIME_ADDITION_MS"))
+	if ta == 0 {
+		ta = 100
+	}
+	ts, _ := strconv.Atoi(os.Getenv("TIME_SUBTRACTION_MS"))
+	if ts == 0 {
+		ts = 100
+	}
+	tm, _ := strconv.Atoi(os.Getenv("TIME_MULTIPLICATIONS_MS"))
+	if tm == 0 {
+		tm = 100
+	}
+	td, _ := strconv.Atoi(os.Getenv("TIME_DIVISIONS_MS"))
+	if td == 0 {
+		td = 100
+	}
+	return &Config{
+		Addr:                port,
+		TimeAddition:        ta,
+		TimeSubtraction:     ts,
+		TimeMultiplications: tm,
+		TimeDivisions:       td,
+	}
+}
+
 type Orchestrator struct {
-    ctx              context.Context
-    cancel           context.CancelFunc
-    wg               sync.WaitGroup
-    mux              sync.RWMutex
-    agents           []*agent.Agent
-    newTasksChan     chan Task
-    resultsChan      chan Result
-    stopChan         chan struct{}
-    expressionStates map[string]*ExpressionState
+	calc.UnimplementedCalcServer
+	Config      *Config
+	db          *sqlx.DB
+	mu          sync.Mutex
+	exprCounter int64
+	taskCounter int64
 }
 
-type Task struct {
-    ID           string
-    Expression   string
-    Operation    string
-    OperationTime time.Time
+func NewOrchestrator() *Orchestrator {
+	db, err := sqlx.Connect("sqlite3", "calcgo.db")
+	if err != nil {
+		log.Fatal("cannot connect to db:", err)
+	}
+	schema := `
+CREATE TABLE IF NOT EXISTS users (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	login TEXT UNIQUE NOT NULL,
+	password_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS expressions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NOT NULL,
+	expr TEXT NOT NULL,
+	status TEXT NOT NULL,
+	result REAL,
+	FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  expr_id INTEGER NOT NULL,
+  arg1 REAL,
+  arg2 REAL,
+  operation TEXT,
+  operation_time INTEGER,
+  in_progress BOOLEAN NOT NULL DEFAULT 0,
+  done BOOLEAN NOT NULL DEFAULT 0,
+  UNIQUE(expr_id, arg1, arg2, operation),
+  FOREIGN KEY(expr_id) REFERENCES expressions(id)
+);
+`
+	if _, err := db.Exec(schema); err != nil {
+		log.Fatal("migrate failed:", err)
+	}
+	return &Orchestrator{Config: ConfigFromEnv(), db: db}
 }
 
-type Result struct {
-    ID     string
-    Result float64
+func (o *Orchestrator) RegisterHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Login, Password string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	hash, err := HashPassword(req.Password)
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := o.db.Exec("INSERT INTO users(login,password_hash) VALUES(?,?)", req.Login, hash); err != nil {
+		http.Error(w, "user exists", http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
-type ExpressionState struct {
-    ID        string
-    Status    string
-    Result    float64
-    StartedAt time.Time
-    EndedAt   time.Time
+func (o *Orchestrator) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Login, Password string }
+	json.NewDecoder(r.Body).Decode(&req)
+	var id int
+	var hash string
+	err := o.db.Get(&hash, "SELECT password_hash FROM users WHERE login=?", req.Login)
+	if err != nil {
+		http.Error(w, "invalid creds", http.StatusUnauthorized)
+		return
+	}
+	err = CheckPassword(hash, req.Password)
+	if err != nil {
+		http.Error(w, "invalid creds", http.StatusUnauthorized)
+		return
+	}
+	o.db.Get(&id, "SELECT id FROM users WHERE login=?", req.Login)
+	tok, err := CreateToken(id)
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"token": tok})
 }
 
-func NewOrchestrator(ctx context.Context, agents []*agent.Agent) *Orchestrator {
-    ctx, cancel := context.WithCancel(ctx)
-
-    return &Orchestrator{
-        ctx:              ctx,
-        cancel:           cancel,
-        agents:           agents,
-        newTasksChan:     make(chan Task),
-        resultsChan:      make(chan Result),
-        stopChan:         make(chan struct{}),
-        expressionStates: make(map[string]*ExpressionState),
-    }
-}
-
-func (o *Orchestrator) Start() {
-    o.wg.Add(len(o.agents))
-    for _, agent := range o.agents {
-        go o.startAgent(agent)
-    }
-
-    go o.taskDistributor()
-    go o.resultCollector()
-
-    log.Println("Orchestrator started")
-}
-
-func (o *Orchestrator) Stop() {
-    o.cancel()
-    close(o.stopChan)
-    o.wg.Wait()
-    log.Println("Orchestrator stopped")
-}
-
-func (o *Orchestrator) startAgent(agent *agent.Agent) {
-    defer o.wg.Done()
-
-    log.Printf("Starting agent %p", agent)
-
-    for {
-        select {
-        case task := <-o.newTasksChan:
-            log.Printf("Assigning task %v to agent %p", task, agent)
-            agent.ProcessTask(task)
-        case <-o.ctx.Done():
-            log.Printf("Stopping agent %p", agent)
-            return
-        }
-    }
-}
-
-func (o *Orchestrator) taskDistributor() {
-    for {
-        select {
-        case task := <-o.newTasksChan:
-            o.assignTaskToAgent(task)
-        case <-o.ctx.Done():
-            log.Println("Task distributor stopping...")
-            return
-        }
-    }
-}
-
-func (o *Orchestrator) assignTaskToAgent(task Task) {
-    o.mux.RLock()
-    defer o.mux.RUnlock()
-    freeAgent := o.findFreeAgent()
-    if freeAgent == nil {
-        log.Printf("No free agents available for task %v", task)
-        return
-    }
-
-    // Назначение задачи агенту
-    freeAgent.ProcessTask(task)
-
-    o.expressionStates[task.ID] = &ExpressionState{
-        ID:     task.ID,
-        Status: "assigned",
-    }
-}
-
-func (o *Orchestrator) findFreeAgent() *agent.Agent {
-    for _, agent := range o.agents {
-        if agent.IsAvailable() {
-            return agent
-        }
-    }
-    return nil
-}
-
-func (o *Orchestrator) resultCollector() {
-    for {
-        select {
-        case result := <-o.resultsChan:
-            log.Printf("Received result for task %v: %f", result.ID, result.Result)
-            o.updateExpressionState(result)
-        case <-o.ctx.Done():
-            log.Println("Result collector stopping...")
-            return
-        }
-    }
-}
-
-func (o *Orchestrator) updateExpressionState(result Result) {
-    o.mux.Lock()
-    defer o.mux.Unlock()
-
-    state, exists := o.expressionStates[result.ID]
-    if !exists {
-        log.Printf("Unknown task ID: %v", result.ID)
-        return
-    }
-
-    state.Status = "completed"
-    state.Result = result.Result
-    state.EndedAt = time.Now()
-}
-
-func (o *Orchestrator) HandleNewTask(w http.ResponseWriter, r *http.Request) {
-    decoder := json.NewDecoder(r.Body)
-    var req struct {
-        Expression string `json:"expression"`
-    }
-    err := decoder.Decode(&req)
-    if err != nil {
-        http.Error(w, "Bad Request", http.StatusBadRequest)
-        return
-    }
-
-    taskID := fmt.Sprintf("%d", time.Now().UnixNano())
-
-    task := Task{
-        ID:         taskID,
-        Expression: req.Expression,
-    }
-
-    o.newTasksChan <- task
-
-    response := struct {
-        ID string `json:"id"`
-    }{
-        ID: taskID,
-    }
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusCreated)
-    json.NewEncoder(w).Encode(response)
-}
-
-func (o *Orchestrator) HandleGetTaskResults(w http.ResponseWriter, r *http.Request) {
-    o.mux.RLock()
-    defer o.mux.RUnlock()
-
-    states := make([]*ExpressionState, 0, len(o.expressionStates))
-    for _, state := range o.expressionStates {
-        states = append(states, state)
-    }
-
-    response := struct {
-        States []*ExpressionState `json:"states"`
-    }{
-        States: states,
-    }
-
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusOK)
-    json.NewEncoder(w).Encode(response)
-}
+func (o *Or
