@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/codes"
-	"github.com/IlyaRogashev/calc_go/calc_servise/internal/calc" // Импортируйте пакет
+	"github.com/IlyaRogashev/calc_go/calc_servise/internal/calc" 
 )
 
 type Agent struct {
@@ -60,7 +60,7 @@ func (a *Agent) worker(id int) {
 			continue
 		}
 		time.Sleep(time.Duration(task.OperationTime) * time.Millisecond)
-		result, err := calc.Calc(task.Operation) // Используйте Calc
+		result, err := calc.Calc(task.Operation)
 		if err != nil {
 			log.Printf("worker %d: Calc error: %v", id, err)
 			continue
